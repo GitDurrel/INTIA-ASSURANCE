@@ -8,32 +8,48 @@ import { InputText } from "primereact/inputtext";
 import { Dropdown } from "primereact/dropdown";
 import { Toast } from "primereact/toast";
 import { Tag } from "primereact/tag";
+import { ConfirmDialog, confirmDialog } from "primereact/confirmdialog";
+
+type Client = {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email?: string | null;
+  cni?: string | null;
+  isActive?: boolean;
+  branchId?: number | null;
+  branch?: { id: number; name: string } | null;
+};
 
 export default function ClientsPage() {
   const toast = useRef<Toast>(null);
 
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<Client[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Ici on lit le rôle depuis api.ts (headers)
+  // Rôle depuis api.ts (headers)
   const role = (api.defaults.headers as any)?.["x-role"] as string | undefined;
   const isDG = role === "DG_ADMIN";
 
-  const [form, setForm] = useState<any>({
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  const emptyForm = {
     firstName: "",
     lastName: "",
     phone: "",
     email: "",
     cni: "",
-    // branchId seulement utile côté DG (sinon forcé par header)
-    branchId: null,
-  });
+    branchId: null as number | null, // utile surtout en DG
+  };
+
+  const [form, setForm] = useState<any>(emptyForm);
 
   const branchOptions = useMemo(
     () =>
-      branches.map((b: any) => ({
+      (branches ?? []).map((b: any) => ({
         label: b.name,
         value: b.id,
       })),
@@ -44,8 +60,14 @@ export default function ClientsPage() {
     setLoading(true);
     try {
       const [c, b] = await Promise.all([api.get("/clients"), api.get("/branches")]);
-      setItems(c.data.items ?? []);
+      setItems((c.data.items ?? []) as Client[]);
       setBranches(b.data ?? []);
+    } catch (e: any) {
+      toast.current?.show({
+        severity: "error",
+        summary: "Erreur",
+        detail: e?.response?.data?.message ?? "Impossible de charger les clients",
+      });
     } finally {
       setLoading(false);
     }
@@ -55,50 +77,75 @@ export default function ClientsPage() {
     load();
   }, []);
 
-  const resetForm = () => {
+  const openCreate = () => {
+    setEditingId(null);
+    setForm(emptyForm);
+    setOpen(true);
+  };
+
+  const openEdit = (c: Client) => {
+    setEditingId(c.id);
     setForm({
-      firstName: "",
-      lastName: "",
-      phone: "",
-      email: "",
-      cni: "",
-      branchId: null,
+      firstName: c.firstName ?? "",
+      lastName: c.lastName ?? "",
+      phone: c.phone ?? "",
+      email: c.email ?? "",
+      cni: c.cni ?? "",
+      branchId: c.branchId ?? c.branch?.id ?? null,
     });
+    setOpen(true);
   };
 
   const save = async () => {
     try {
-      // Si DG: branchId obligatoire
-      if (isDG && !form.branchId) {
+      // Validation simple
+      if (!form.firstName?.trim() || !form.lastName?.trim() || !form.phone?.trim()) {
         toast.current?.show({
           severity: "warn",
-          summary: "Agence requise",
-          detail: "Sélectionnez une agence pour ce client.",
+          summary: "Champs requis",
+          detail: "Prénom, Nom et Téléphone sont obligatoires.",
         });
         return;
       }
 
+      // En création : DG doit choisir agence (sinon le service refuse)
+      if (!editingId && isDG && !form.branchId) {
+        toast.current?.show({
+          severity: "warn",
+          summary: "Agence requise",
+          detail: "Sélectionnez une agence pour créer le client.",
+        });
+        return;
+      }
+
+      // Payload (en AGENT, branchId est ignoré/forcé par header côté backend)
       const payload = isDG
-        ? form
+        ? {
+            firstName: form.firstName,
+            lastName: form.lastName,
+            phone: form.phone,
+            email: form.email?.trim() || undefined,
+            cni: form.cni?.trim() || undefined,
+            branchId: form.branchId,
+          }
         : {
             firstName: form.firstName,
             lastName: form.lastName,
             phone: form.phone,
-            email: form.email,
-            cni: form.cni || undefined,
-            // branchId sera forcé par le service via x-branch-id
+            email: form.email?.trim() || undefined,
+            cni: form.cni?.trim() || undefined,
           };
 
-      await api.post("/clients", payload);
-
-      toast.current?.show({
-        severity: "success",
-        summary: "Succès",
-        detail: "Client créé",
-      });
+      if (!editingId) {
+        await api.post("/clients", payload);
+        toast.current?.show({ severity: "success", summary: "OK", detail: "Client créé" });
+      } else {
+        await api.patch(`/clients/${editingId}`, payload);
+        toast.current?.show({ severity: "success", summary: "OK", detail: "Client mis à jour" });
+      }
 
       setOpen(false);
-      resetForm();
+      setEditingId(null);
       await load();
     } catch (e: any) {
       toast.current?.show({
@@ -109,9 +156,74 @@ export default function ClientsPage() {
     }
   };
 
+  // Soft delete => ton backend fait isActive=false sur DELETE /clients/:id
+  const deactivateClient = (c: Client) => {
+    confirmDialog({
+      header: "Confirmer la désactivation",
+      message: `Désactiver le client ${c.firstName} ${c.lastName} ?`,
+      icon: "pi pi-exclamation-triangle",
+      acceptLabel: "Désactiver",
+      rejectLabel: "Annuler",
+      acceptClassName: "p-button-warning",
+      accept: async () => {
+        try {
+          await api.delete(`/clients/${c.id}`);
+          toast.current?.show({ severity: "success", summary: "OK", detail: "Client désactivé" });
+          await load();
+        } catch (e: any) {
+          toast.current?.show({
+            severity: "error",
+            summary: "Erreur",
+            detail: e?.response?.data?.message ?? "Erreur serveur",
+          });
+        }
+      },
+    });
+  };
+
+  const statusBody = (c: Client) => (
+    <Tag value={c.isActive === false ? "Désactivé" : "Actif"} severity={c.isActive === false ? "danger" : "success"} />
+  );
+
+  const clientBody = (c: Client) =>
+    `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "-";
+
+  const actionsBody = (c: Client) => (
+    <div className="flex gap-2">
+      <Button
+        icon="pi pi-pencil"
+        rounded
+        outlined
+        severity="info"
+        tooltip="Modifier"
+        onClick={() => openEdit(c)}
+      />
+      {c.isActive === false ? (
+        <Button
+          icon="pi pi-ban"
+          rounded
+          outlined
+          severity="secondary"
+          tooltip="Déjà désactivé"
+          disabled
+        />
+      ) : (
+        <Button
+          icon="pi pi-ban"
+          rounded
+          outlined
+          severity="warning"
+          tooltip="Désactiver"
+          onClick={() => deactivateClient(c)}
+        />
+      )}
+    </div>
+  );
+
   return (
     <div>
       <Toast ref={toast} />
+      <ConfirmDialog />
 
       <div className="flex justify-content-between align-items-center mb-3">
         <div>
@@ -120,16 +232,14 @@ export default function ClientsPage() {
             Rôle courant :{" "}
             <Tag value={isDG ? "DG_ADMIN" : "AGENT"} severity={isDG ? "success" : "info"} />
           </div>
+          {!isDG && (
+            <div className="text-500">
+              Astuce : en mode AGENT, assure-toi d’avoir <b>x-branch-id</b> dans <code>api.ts</code>.
+            </div>
+          )}
         </div>
 
-        <Button
-          label="Nouveau client"
-          icon="pi pi-user-plus"
-          onClick={() => {
-            resetForm();
-            setOpen(true);
-          }}
-        />
+        <Button label="Nouveau client" icon="pi pi-user-plus" onClick={openCreate} />
       </div>
 
       <DataTable
@@ -142,25 +252,24 @@ export default function ClientsPage() {
         responsiveLayout="scroll"
         emptyMessage="Aucun client."
       >
-        <Column
-          header="Client"
-          body={(c: any) => `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "-"}
-        />
+        <Column header="Client" body={clientBody} />
         <Column field="phone" header="Téléphone" />
         <Column field="email" header="Email" />
         <Column field="cni" header="CNI" />
-        <Column header="Agence" body={(c: any) => c.branch?.name ?? "-"} />
+        <Column header="Agence" body={(c: Client) => c.branch?.name ?? "-"} />
+        <Column header="Statut" body={statusBody} style={{ width: "9rem" }} />
+        <Column header="Actions" body={actionsBody} style={{ width: "12rem" }} />
       </DataTable>
 
       <Dialog
-        header="Créer un client"
+        header={editingId ? "Modifier un client" : "Créer un client"}
         visible={open}
-        style={{ width: "36rem" }}
+        style={{ width: "38rem" }}
         onHide={() => setOpen(false)}
         footer={
           <div className="flex justify-content-end gap-2">
             <Button label="Annuler" className="p-button-text" onClick={() => setOpen(false)} />
-            <Button label="Créer" icon="pi pi-check" onClick={save} />
+            <Button label={editingId ? "Enregistrer" : "Créer"} icon="pi pi-check" onClick={save} />
           </div>
         }
       >
@@ -222,6 +331,7 @@ export default function ClientsPage() {
                 value={form.branchId}
                 placeholder="Sélectionner une agence"
                 onChange={(e) => setForm({ ...form, branchId: e.value })}
+                filter
               />
               <small className="text-500">
                 En mode DG, vous choisissez l’agence du client.

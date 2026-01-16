@@ -44,7 +44,7 @@ export class ClientsController {
       pageSize: pageSize ? Number(pageSize) : undefined,
       actor,
     });
-  }
+  }                                                                                                                                                                                                                                                                                                                                                                                                                                 8 
 
   @Get(':id')
   findOne(
