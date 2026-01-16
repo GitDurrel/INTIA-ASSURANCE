@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: api_nest_postgres
+    environment:
+      POSTGRES_USER: api_user
+      POSTGRES_PASSWORD: api_pass
+      POSTGRES_DB: api_nest
+    ports:
+      - "5433:5432"
+    volumes:
+      - api_nest_pgdata:/var/lib/postgresql/data
+
+volumes:
+  api_nest_pgdata:

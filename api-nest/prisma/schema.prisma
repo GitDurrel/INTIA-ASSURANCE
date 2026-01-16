@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Branch {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique // DOUALA / YAOUNDE / DG
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users    User[]
+  clients  Client[]
+  policies Policy[]
+}
+
+model User {
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  fullName String
+  password String
+  role     Role    @default(AGENT)
+  isActive Boolean @default(true)
+
+  branchId Int?
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@index([branchId])
+}
+
+model Client {
+  id        Int     @id @default(autoincrement())
+  firstName String
+  lastName  String
+  phone     String
+  email     String?
+  cni       String? @unique
+  address   String?
+
+  // rattachement agence
+  branchId Int
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  policies Policy[]
+
+  @@unique([phone, lastName]) // anti-doublon simple
+  @@index([phone])
+  @@index([branchId])
+}
+
+model Policy {
+  id       Int          @id @default(autoincrement())
+  policyNo String       @unique
+  type     PolicyType
+  status   PolicyStatus @default(ACTIVE)
+
+  startDate DateTime
+  endDate   DateTime
+  premium   Int
+
+  // relations
+  clientId Int
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  branchId Int
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([branchId])
+  @@index([status])
+}
+
+// ********** Enums **********
+enum Role {
+  DG_ADMIN
+  AGENCY_MANAGER
+  AGENT
+}
+
+enum PolicyStatus {
+  ACTIVE
+  EXPIRED
+  CANCELED
+}
+
+enum PolicyType {
+  AUTO
+  HEALTH
+  HOME
+  TRAVEL
+  OTHER
+}
+
